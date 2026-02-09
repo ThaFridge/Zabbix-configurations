@@ -1,0 +1,415 @@
+zabbix_export:
+  version: '7.0'
+  template_groups:
+    - uuid: 7df96b18c230490a9a0a9e2307226338
+      name: 'Templates/Cloud'
+
+  templates:
+    - uuid: a1b2c3d4e5f6a7b8c9d0e1f2a3b4c5d6
+      name: 'Cloudflare Health'
+      description: |
+        Monitor Cloudflare status via de publieke status API.
+        Inclusief per-component monitoring, actieve DNS/HTTP checks en SSL expiry.
+        Stel de macro {$CF.DOMAIN} in op het klantdomein dat je wilt monitoren.
+      groups:
+        - name: 'Templates/Cloud'
+
+      macros:
+        - macro: '{$CF.DOMAIN}'
+          value: 'example.com'
+          description: 'Klantdomein om te monitoren (achter Cloudflare)'
+        - macro: '{$CF.RESPONSE_TIME_WARN}'
+          value: '3'
+          description: 'Response time warning threshold in seconden'
+        - macro: '{$CF.SSL_WARN_DAYS}'
+          value: '14'
+          description: 'SSL certificaat warning drempel in dagen'
+        - macro: '{$CF.SSL_HIGH_DAYS}'
+          value: '7'
+          description: 'SSL certificaat high severity drempel in dagen'
+        - macro: '{$CF.STATUS_INTERVAL}'
+          value: '3m'
+          description: 'Polling interval voor status API'
+        - macro: '{$CF.HTTP_INTERVAL}'
+          value: '2m'
+          description: 'Polling interval voor HTTP checks'
+
+      # ===========================================================
+      # ITEMS
+      # ===========================================================
+      items:
+        # -----------------------------------------------------------
+        # Master item: Overall status
+        # -----------------------------------------------------------
+        - uuid: 10000000000000000000000000000001
+          name: 'Cloudflare: Overall status raw'
+          type: HTTP_AGENT
+          key: cf.status.raw
+          delay: '{$CF.STATUS_INTERVAL}'
+          history: 0d
+          trends: 0d
+          value_type: TEXT
+          url: 'https://www.cloudflarestatus.com/api/v2/status.json'
+          description: 'Raw JSON van Cloudflare status endpoint'
+          tags:
+            - tag: component
+              value: cloudflare
+
+        - uuid: 10000000000000000000000000000002
+          name: 'Cloudflare: Overall status indicator'
+          type: DEPENDENT
+          key: cf.status.indicator
+          delay: '0'
+          value_type: TEXT
+          description: 'none = alles OK, minor/major/critical = storing'
+          preprocessing:
+            - type: JSONPATH
+              parameters:
+                - '$.status.indicator'
+          master_item:
+            key: cf.status.raw
+          triggers:
+            - uuid: 20000000000000000000000000000001
+              expression: 'last(/Cloudflare Health/cf.status.indicator)="minor"'
+              name: 'Cloudflare: Minor outage gemeld'
+              priority: WARNING
+              description: 'Cloudflare meldt een minor outage. Controleer impact bij klanten.'
+            - uuid: 20000000000000000000000000000002
+              expression: 'last(/Cloudflare Health/cf.status.indicator)="major"'
+              name: 'Cloudflare: Major outage gemeld'
+              priority: HIGH
+              description: 'Cloudflare meldt een major outage. Klanten zijn waarschijnlijk getroffen.'
+            - uuid: 20000000000000000000000000000003
+              expression: 'last(/Cloudflare Health/cf.status.indicator)="critical"'
+              name: 'Cloudflare: Critical outage gemeld'
+              priority: DISASTER
+              description: 'Cloudflare meldt een critical outage. Alle klanten zijn getroffen.'
+
+        - uuid: 10000000000000000000000000000003
+          name: 'Cloudflare: Overall status description'
+          type: DEPENDENT
+          key: cf.status.description
+          delay: '0'
+          value_type: TEXT
+          preprocessing:
+            - type: JSONPATH
+              parameters:
+                - '$.status.description'
+          master_item:
+            key: cf.status.raw
+
+        # -----------------------------------------------------------
+        # Master item: Components
+        # -----------------------------------------------------------
+        - uuid: 10000000000000000000000000000010
+          name: 'Cloudflare: Components raw'
+          type: HTTP_AGENT
+          key: cf.components.raw
+          delay: '{$CF.STATUS_INTERVAL}'
+          history: 0d
+          trends: 0d
+          value_type: TEXT
+          url: 'https://www.cloudflarestatus.com/api/v2/components.json'
+          description: 'Raw JSON van alle Cloudflare componenten'
+          tags:
+            - tag: component
+              value: cloudflare
+
+        # -----------------------------------------------------------
+        # Dependent items per component
+        # -----------------------------------------------------------
+        - uuid: 10000000000000000000000000000011
+          name: 'Cloudflare: CDN/Cache status'
+          type: DEPENDENT
+          key: cf.component.cdn
+          delay: '0'
+          value_type: TEXT
+          preprocessing:
+            - type: JSONPATH
+              parameters:
+                - '$.components[?(@.name=="CDN/Cache")].status.first()'
+          master_item:
+            key: cf.components.raw
+          triggers:
+            - uuid: 20000000000000000000000000000011
+              expression: 'last(/Cloudflare Health/cf.component.cdn)<>"operational" and length(last(/Cloudflare Health/cf.component.cdn))>0'
+              name: 'Cloudflare: CDN/Cache niet operational ({ITEM.LASTVALUE1})'
+              priority: HIGH
+              description: 'Cloudflare CDN is niet operational. Websites van klanten kunnen traag laden of onbereikbaar zijn.'
+
+        - uuid: 10000000000000000000000000000012
+          name: 'Cloudflare: Authoritative DNS status'
+          type: DEPENDENT
+          key: cf.component.dns
+          delay: '0'
+          value_type: TEXT
+          preprocessing:
+            - type: JSONPATH
+              parameters:
+                - '$.components[?(@.name=="Authoritative DNS")].status.first()'
+          master_item:
+            key: cf.components.raw
+          triggers:
+            - uuid: 20000000000000000000000000000012
+              expression: 'last(/Cloudflare Health/cf.component.dns)<>"operational" and length(last(/Cloudflare Health/cf.component.dns))>0'
+              name: 'Cloudflare: DNS niet operational ({ITEM.LASTVALUE1})'
+              priority: DISASTER
+              description: 'Cloudflare DNS is niet operational. Domeinen van klanten resolven mogelijk niet meer.'
+
+        - uuid: 10000000000000000000000000000013
+          name: 'Cloudflare: API status'
+          type: DEPENDENT
+          key: cf.component.api
+          delay: '0'
+          value_type: TEXT
+          preprocessing:
+            - type: JSONPATH
+              parameters:
+                - '$.components[?(@.name=="API")].status.first()'
+          master_item:
+            key: cf.components.raw
+          triggers:
+            - uuid: 20000000000000000000000000000013
+              expression: 'last(/Cloudflare Health/cf.component.api)<>"operational" and length(last(/Cloudflare Health/cf.component.api))>0'
+              name: 'Cloudflare: API niet operational ({ITEM.LASTVALUE1})'
+              priority: HIGH
+              description: 'Cloudflare API is niet beschikbaar. Configuratiewijzigingen zijn niet mogelijk.'
+
+        - uuid: 10000000000000000000000000000014
+          name: 'Cloudflare: Dashboard status'
+          type: DEPENDENT
+          key: cf.component.dashboard
+          delay: '0'
+          value_type: TEXT
+          preprocessing:
+            - type: JSONPATH
+              parameters:
+                - '$.components[?(@.name=="Dashboard")].status.first()'
+          master_item:
+            key: cf.components.raw
+          triggers:
+            - uuid: 20000000000000000000000000000014
+              expression: 'last(/Cloudflare Health/cf.component.dashboard)<>"operational" and length(last(/Cloudflare Health/cf.component.dashboard))>0'
+              name: 'Cloudflare: Dashboard niet operational ({ITEM.LASTVALUE1})'
+              priority: WARNING
+              description: 'Cloudflare Dashboard is niet beschikbaar.'
+
+        # -----------------------------------------------------------
+        # Actieve checks: Ping naar Cloudflare
+        # -----------------------------------------------------------
+        - uuid: 10000000000000000000000000000020
+          name: 'Cloudflare: Ping 1.1.1.1'
+          type: SIMPLE
+          key: 'icmpping[1.1.1.1,4]'
+          delay: '1m'
+          value_type: UNSIGNED
+          description: '1 = bereikbaar, 0 = onbereikbaar'
+          tags:
+            - tag: component
+              value: cloudflare
+          triggers:
+            - uuid: 20000000000000000000000000000020
+              expression: 'last(/Cloudflare Health/icmpping[1.1.1.1,4])=0'
+              name: 'Cloudflare: 1.1.1.1 onbereikbaar via ICMP'
+              priority: HIGH
+              description: 'Cloudflare 1.1.1.1 reageert niet op ping. Mogelijk netwerkprobleem of Cloudflare outage.'
+
+        - uuid: 10000000000000000000000000000021
+          name: 'Cloudflare: Ping latency 1.1.1.1'
+          type: SIMPLE
+          key: 'icmppingsec[1.1.1.1,4]'
+          delay: '1m'
+          value_type: FLOAT
+          units: s
+          description: 'ICMP round-trip time naar 1.1.1.1 in seconden'
+          tags:
+            - tag: component
+              value: cloudflare
+
+        # -----------------------------------------------------------
+        # Actieve checks: HTTP naar klantdomein
+        # -----------------------------------------------------------
+        - uuid: 10000000000000000000000000000030
+          name: 'Cloudflare: HTTP status {$CF.DOMAIN}'
+          type: HTTP_AGENT
+          key: 'cf.http.status[{$CF.DOMAIN}]'
+          delay: '{$CF.HTTP_INTERVAL}'
+          value_type: UNSIGNED
+          url: 'https://{$CF.DOMAIN}'
+          retrieve_mode: HEADERS
+          description: 'HTTP status code van het klantdomein'
+          preprocessing:
+            - type: REGEX
+              parameters:
+                - 'HTTP/\d\.?\d?\s(\d{3})'
+                - '\1'
+          tags:
+            - tag: component
+              value: website
+          triggers:
+            - uuid: 20000000000000000000000000000030
+              expression: 'last(/Cloudflare Health/cf.http.status[{$CF.DOMAIN}])<>200'
+              name: 'Cloudflare: {$CF.DOMAIN} HTTP status {ITEM.LASTVALUE1} (niet 200)'
+              priority: HIGH
+              description: 'Website {$CF.DOMAIN} geeft geen HTTP 200 terug.'
+
+        - uuid: 10000000000000000000000000000031
+          name: 'Cloudflare: Response time {$CF.DOMAIN}'
+          type: HTTP_AGENT
+          key: 'cf.http.resptime[{$CF.DOMAIN}]'
+          delay: '{$CF.HTTP_INTERVAL}'
+          value_type: FLOAT
+          units: s
+          url: 'https://{$CF.DOMAIN}'
+          retrieve_mode: HEADERS
+          description: 'HTTP response time van het klantdomein in seconden'
+          tags:
+            - tag: component
+              value: website
+          triggers:
+            - uuid: 20000000000000000000000000000031
+              expression: 'last(/Cloudflare Health/cf.http.resptime[{$CF.DOMAIN}])>{$CF.RESPONSE_TIME_WARN}'
+              name: 'Cloudflare: {$CF.DOMAIN} response time hoog ({ITEM.LASTVALUE1}s)'
+              priority: WARNING
+              description: 'Website {$CF.DOMAIN} reageert trager dan {$CF.RESPONSE_TIME_WARN} seconden.'
+
+        # -----------------------------------------------------------
+        # DNS resolve check
+        # -----------------------------------------------------------
+        - uuid: 10000000000000000000000000000040
+          name: 'Cloudflare: DNS resolve {$CF.DOMAIN}'
+          type: SIMPLE
+          key: 'net.dns.record[,{$CF.DOMAIN},A,2,1]'
+          delay: '{$CF.HTTP_INTERVAL}'
+          value_type: TEXT
+          description: 'DNS A-record lookup voor het klantdomein'
+          tags:
+            - tag: component
+              value: dns
+          triggers:
+            - uuid: 20000000000000000000000000000040
+              expression: 'nodata(/Cloudflare Health/net.dns.record[,{$CF.DOMAIN},A,2,1],10m)=1'
+              name: 'Cloudflare: DNS resolve voor {$CF.DOMAIN} mislukt'
+              priority: DISASTER
+              description: 'DNS lookup voor {$CF.DOMAIN} levert geen resultaat. Domein is onbereikbaar.'
+
+        # -----------------------------------------------------------
+        # SSL certificaat expiry
+        # -----------------------------------------------------------
+        - uuid: 10000000000000000000000000000050
+          name: 'Cloudflare: SSL cert expiry {$CF.DOMAIN}'
+          type: SIMPLE
+          key: 'web.certificate.get[{$CF.DOMAIN},443]'
+          delay: '6h'
+          value_type: TEXT
+          history: 0d
+          description: 'SSL certificaat informatie voor het klantdomein'
+          tags:
+            - tag: component
+              value: ssl
+
+        - uuid: 10000000000000000000000000000051
+          name: 'Cloudflare: SSL dagen resterend {$CF.DOMAIN}'
+          type: DEPENDENT
+          key: 'cf.ssl.days[{$CF.DOMAIN}]'
+          delay: '0'
+          value_type: UNSIGNED
+          units: days
+          description: 'Aantal dagen tot SSL certificaat verloopt'
+          preprocessing:
+            - type: JSONPATH
+              parameters:
+                - '$.result.not_after.timestamp'
+            - type: JAVASCRIPT
+              parameters:
+                - 'return Math.floor((value - Date.now()/1000) / 86400);'
+          master_item:
+            key: 'web.certificate.get[{$CF.DOMAIN},443]'
+          triggers:
+            - uuid: 20000000000000000000000000000051
+              expression: 'last(/Cloudflare Health/cf.ssl.days[{$CF.DOMAIN}])<{$CF.SSL_WARN_DAYS}'
+              name: 'Cloudflare: SSL {$CF.DOMAIN} verloopt binnen {$CF.SSL_WARN_DAYS} dagen'
+              priority: WARNING
+            - uuid: 20000000000000000000000000000052
+              expression: 'last(/Cloudflare Health/cf.ssl.days[{$CF.DOMAIN}])<{$CF.SSL_HIGH_DAYS}'
+              name: 'Cloudflare: SSL {$CF.DOMAIN} verloopt binnen {$CF.SSL_HIGH_DAYS} dagen'
+              priority: HIGH
+
+      # ===========================================================
+      # DASHBOARDS
+      # ===========================================================
+      dashboards:
+        - uuid: 30000000000000000000000000000001
+          name: 'Cloudflare Health'
+          pages:
+            - widgets:
+                - type: ITEM
+                  name: 'Overall Status'
+                  width: '12'
+                  height: '3'
+                  fields:
+                    - type: ITEM
+                      name: itemid
+                      value:
+                        host: 'Cloudflare Health'
+                        key: cf.status.description
+
+                - type: PLAIN_TEXT
+                  name: 'Component Status'
+                  x: '12'
+                  width: '12'
+                  height: '6'
+                  fields:
+                    - type: ITEM
+                      name: itemids
+                      value:
+                        host: 'Cloudflare Health'
+                        key: cf.component.cdn
+                    - type: ITEM
+                      name: itemids
+                      value:
+                        host: 'Cloudflare Health'
+                        key: cf.component.dns
+                    - type: ITEM
+                      name: itemids
+                      value:
+                        host: 'Cloudflare Health'
+                        key: cf.component.api
+                    - type: ITEM
+                      name: itemids
+                      value:
+                        host: 'Cloudflare Health'
+                        key: cf.component.dashboard
+                    - type: INTEGER
+                      name: show_lines
+                      value: '10'
+
+                - type: GRAPH_CLASSIC
+                  name: 'Response Time'
+                  y: '3'
+                  width: '12'
+                  height: '5'
+                  fields:
+                    - type: ITEM
+                      name: itemids
+                      value:
+                        host: 'Cloudflare Health'
+                        key: 'cf.http.resptime[{$CF.DOMAIN}]'
+                    - type: ITEM
+                      name: itemids
+                      value:
+                        host: 'Cloudflare Health'
+                        key: 'icmppingsec[1.1.1.1,4]'
+
+                - type: PROBLEMS
+                  name: 'Actieve Problemen'
+                  y: '8'
+                  width: '24'
+                  height: '4'
+                  fields:
+                    - type: STRING
+                      name: tags.tag.0
+                      value: component
+                    - type: STRING
+                      name: tags.value.0
+                      value: cloudflare

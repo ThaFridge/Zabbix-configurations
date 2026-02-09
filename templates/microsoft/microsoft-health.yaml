@@ -1,0 +1,548 @@
+zabbix_export:
+  version: '7.0'
+  template_groups:
+    - uuid: 7df96b18c230490a9a0a9e2307226339
+      name: 'Templates/Cloud'
+
+  templates:
+    - uuid: b1c2d3e4f5a6b7c8d9e0f1a2b3c4d5e6
+      name: 'Microsoft Cloud Health'
+      description: |
+        Monitor Microsoft 365 en Azure diensten via Microsoft Graph API.
+        Monitort service health, actieve incidenten, en specifieke diensten
+        zoals Exchange, Teams, SharePoint, Azure AD, Intune en AVD.
+
+        Vereist een Azure AD App Registration met ServiceHealth.Read.All permission.
+        Stel de macros {$MS.TENANT.ID}, {$MS.APP.ID} en {$MS.APP.SECRET} in.
+      groups:
+        - name: 'Templates/Cloud'
+
+      macros:
+        - macro: '{$MS.TENANT.ID}'
+          value: ''
+          description: 'Azure AD Tenant ID'
+        - macro: '{$MS.APP.ID}'
+          value: ''
+          description: 'Azure AD App Registration - Application (client) ID'
+        - macro: '{$MS.APP.SECRET}'
+          value: ''
+          type: SECRET_TEXT
+          description: 'Azure AD App Registration - Client Secret'
+        - macro: '{$MS.GRAPH.URL}'
+          value: 'https://graph.microsoft.com/v1.0'
+          description: 'Microsoft Graph API base URL'
+        - macro: '{$MS.LOGIN.URL}'
+          value: 'https://login.microsoftonline.com'
+          description: 'Azure AD login endpoint'
+        - macro: '{$MS.STATUS.INTERVAL}'
+          value: '5m'
+          description: 'Poll interval voor service health'
+        - macro: '{$MS.TOKEN.INTERVAL}'
+          value: '50m'
+          description: 'Token refresh interval (tokens verlopen na 60 min)'
+        - macro: '{$MS.PORTAL.URL}'
+          value: 'https://portal.azure.com'
+          description: 'Azure portal URL (voor links in triggers)'
+
+      # ===========================================================
+      # ITEMS
+      # ===========================================================
+      items:
+        # -----------------------------------------------------------
+        # OAuth2 Token ophalen
+        # -----------------------------------------------------------
+        - uuid: 40000000000000000000000000000001
+          name: 'Microsoft: OAuth2 Token'
+          type: HTTP_AGENT
+          key: ms.auth.token
+          delay: '{$MS.TOKEN.INTERVAL}'
+          history: 0d
+          trends: 0d
+          value_type: TEXT
+          url: '{$MS.LOGIN.URL}/{$MS.TENANT.ID}/oauth2/v2.0/token'
+          request_method: POST
+          post_type: BODY
+          posts: 'grant_type=client_credentials&client_id={$MS.APP.ID}&client_secret={$MS.APP.SECRET}&scope=https://graph.microsoft.com/.default'
+          headers:
+            - name: Content-Type
+              value: application/x-www-form-urlencoded
+          description: 'Haalt een OAuth2 bearer token op via client credentials flow'
+          preprocessing:
+            - type: JSONPATH
+              parameters:
+                - '$.access_token'
+          tags:
+            - tag: component
+              value: microsoft-auth
+
+        # -----------------------------------------------------------
+        # Master item: Service Health Overview
+        # -----------------------------------------------------------
+        - uuid: 40000000000000000000000000000010
+          name: 'Microsoft: Service Health raw'
+          type: HTTP_AGENT
+          key: ms.health.raw
+          delay: '{$MS.STATUS.INTERVAL}'
+          history: 0d
+          trends: 0d
+          value_type: TEXT
+          url: '{$MS.GRAPH.URL}/admin/serviceAnnouncement/healthOverviews'
+          headers:
+            - name: Authorization
+              value: 'Bearer {last(/Microsoft Cloud Health/ms.auth.token)}'
+            - name: Content-Type
+              value: application/json
+          description: 'Raw JSON van alle Microsoft service health overviews'
+          tags:
+            - tag: component
+              value: microsoft
+
+        # -----------------------------------------------------------
+        # Dependent items: Per dienst health status
+        # -----------------------------------------------------------
+
+        # --- Exchange Online ---
+        - uuid: 40000000000000000000000000000011
+          name: 'Microsoft: Exchange Online status'
+          type: DEPENDENT
+          key: ms.health.exchange
+          delay: '0'
+          value_type: TEXT
+          description: 'Status van Exchange Online (email)'
+          preprocessing:
+            - type: JSONPATH
+              parameters:
+                - '$.value[?(@.service=="Exchange Online")].status.first()'
+              error_handler: CUSTOM_VALUE
+              error_handler_params: 'unknown'
+          master_item:
+            key: ms.health.raw
+          triggers:
+            - uuid: 50000000000000000000000000000011
+              expression: 'last(/Microsoft Cloud Health/ms.health.exchange)<>"serviceOperational" and last(/Microsoft Cloud Health/ms.health.exchange)<>"unknown"'
+              name: 'Microsoft: Exchange Online niet operational ({ITEM.LASTVALUE1})'
+              priority: HIGH
+              description: 'Exchange Online meldt een probleem. Email voor klanten kan verstoord zijn.'
+
+        # --- Microsoft Teams ---
+        - uuid: 40000000000000000000000000000012
+          name: 'Microsoft: Teams status'
+          type: DEPENDENT
+          key: ms.health.teams
+          delay: '0'
+          value_type: TEXT
+          description: 'Status van Microsoft Teams'
+          preprocessing:
+            - type: JSONPATH
+              parameters:
+                - '$.value[?(@.service=="Microsoft Teams")].status.first()'
+              error_handler: CUSTOM_VALUE
+              error_handler_params: 'unknown'
+          master_item:
+            key: ms.health.raw
+          triggers:
+            - uuid: 50000000000000000000000000000012
+              expression: 'last(/Microsoft Cloud Health/ms.health.teams)<>"serviceOperational" and last(/Microsoft Cloud Health/ms.health.teams)<>"unknown"'
+              name: 'Microsoft: Teams niet operational ({ITEM.LASTVALUE1})'
+              priority: HIGH
+              description: 'Microsoft Teams meldt een probleem.'
+
+        # --- SharePoint Online ---
+        - uuid: 40000000000000000000000000000013
+          name: 'Microsoft: SharePoint Online status'
+          type: DEPENDENT
+          key: ms.health.sharepoint
+          delay: '0'
+          value_type: TEXT
+          description: 'Status van SharePoint Online'
+          preprocessing:
+            - type: JSONPATH
+              parameters:
+                - '$.value[?(@.service=="SharePoint Online")].status.first()'
+              error_handler: CUSTOM_VALUE
+              error_handler_params: 'unknown'
+          master_item:
+            key: ms.health.raw
+          triggers:
+            - uuid: 50000000000000000000000000000013
+              expression: 'last(/Microsoft Cloud Health/ms.health.sharepoint)<>"serviceOperational" and last(/Microsoft Cloud Health/ms.health.sharepoint)<>"unknown"'
+              name: 'Microsoft: SharePoint Online niet operational ({ITEM.LASTVALUE1})'
+              priority: HIGH
+
+        # --- Microsoft Entra (Azure AD) ---
+        - uuid: 40000000000000000000000000000014
+          name: 'Microsoft: Entra ID status'
+          type: DEPENDENT
+          key: ms.health.entra
+          delay: '0'
+          value_type: TEXT
+          description: 'Status van Microsoft Entra ID (voorheen Azure AD)'
+          preprocessing:
+            - type: JSONPATH
+              parameters:
+                - '$.value[?(@.service=="Microsoft Entra")].status.first()'
+              error_handler: CUSTOM_VALUE
+              error_handler_params: 'unknown'
+          master_item:
+            key: ms.health.raw
+          triggers:
+            - uuid: 50000000000000000000000000000014
+              expression: 'last(/Microsoft Cloud Health/ms.health.entra)<>"serviceOperational" and last(/Microsoft Cloud Health/ms.health.entra)<>"unknown"'
+              name: 'Microsoft: Entra ID niet operational ({ITEM.LASTVALUE1})'
+              priority: DISASTER
+              description: 'Microsoft Entra ID (Azure AD) meldt een probleem. Authenticatie kan verstoord zijn voor alle klanten.'
+
+        # --- Microsoft Intune ---
+        - uuid: 40000000000000000000000000000015
+          name: 'Microsoft: Intune status'
+          type: DEPENDENT
+          key: ms.health.intune
+          delay: '0'
+          value_type: TEXT
+          description: 'Status van Microsoft Intune'
+          preprocessing:
+            - type: JSONPATH
+              parameters:
+                - '$.value[?(@.service=="Microsoft Intune")].status.first()'
+              error_handler: CUSTOM_VALUE
+              error_handler_params: 'unknown'
+          master_item:
+            key: ms.health.raw
+          triggers:
+            - uuid: 50000000000000000000000000000015
+              expression: 'last(/Microsoft Cloud Health/ms.health.intune)<>"serviceOperational" and last(/Microsoft Cloud Health/ms.health.intune)<>"unknown"'
+              name: 'Microsoft: Intune niet operational ({ITEM.LASTVALUE1})'
+              priority: HIGH
+              description: 'Microsoft Intune meldt een probleem. Device management kan verstoord zijn.'
+
+        # --- Microsoft 365 Apps ---
+        - uuid: 40000000000000000000000000000016
+          name: 'Microsoft: Microsoft 365 Apps status'
+          type: DEPENDENT
+          key: ms.health.m365apps
+          delay: '0'
+          value_type: TEXT
+          description: 'Status van Microsoft 365 Apps (Word, Excel, etc.)'
+          preprocessing:
+            - type: JSONPATH
+              parameters:
+                - '$.value[?(@.service=="Microsoft 365 Apps")].status.first()'
+              error_handler: CUSTOM_VALUE
+              error_handler_params: 'unknown'
+          master_item:
+            key: ms.health.raw
+          triggers:
+            - uuid: 50000000000000000000000000000016
+              expression: 'last(/Microsoft Cloud Health/ms.health.m365apps)<>"serviceOperational" and last(/Microsoft Cloud Health/ms.health.m365apps)<>"unknown"'
+              name: 'Microsoft: M365 Apps niet operational ({ITEM.LASTVALUE1})'
+              priority: WARNING
+
+        # --- OneDrive for Business ---
+        - uuid: 40000000000000000000000000000017
+          name: 'Microsoft: OneDrive status'
+          type: DEPENDENT
+          key: ms.health.onedrive
+          delay: '0'
+          value_type: TEXT
+          description: 'Status van OneDrive for Business'
+          preprocessing:
+            - type: JSONPATH
+              parameters:
+                - '$.value[?(@.service=="OneDrive for Business")].status.first()'
+              error_handler: CUSTOM_VALUE
+              error_handler_params: 'unknown'
+          master_item:
+            key: ms.health.raw
+          triggers:
+            - uuid: 50000000000000000000000000000017
+              expression: 'last(/Microsoft Cloud Health/ms.health.onedrive)<>"serviceOperational" and last(/Microsoft Cloud Health/ms.health.onedrive)<>"unknown"'
+              name: 'Microsoft: OneDrive niet operational ({ITEM.LASTVALUE1})'
+              priority: WARNING
+
+        # --- Azure Virtual Desktop (AVD) ---
+        - uuid: 40000000000000000000000000000018
+          name: 'Microsoft: Azure Virtual Desktop status'
+          type: DEPENDENT
+          key: ms.health.avd
+          delay: '0'
+          value_type: TEXT
+          description: 'Status van Azure Virtual Desktop (AVD)'
+          preprocessing:
+            - type: JSONPATH
+              parameters:
+                - '$.value[?(@.service=="Azure Virtual Desktop Infrastructure")].status.first()'
+              error_handler: CUSTOM_VALUE
+              error_handler_params: 'unknown'
+          master_item:
+            key: ms.health.raw
+          triggers:
+            - uuid: 50000000000000000000000000000018
+              expression: 'last(/Microsoft Cloud Health/ms.health.avd)<>"serviceOperational" and last(/Microsoft Cloud Health/ms.health.avd)<>"unknown"'
+              name: 'Microsoft: Azure Virtual Desktop niet operational ({ITEM.LASTVALUE1})'
+              priority: DISASTER
+              description: 'Azure Virtual Desktop meldt een probleem. Klanten die AVD gebruiken kunnen niet werken.'
+
+        # --- Microsoft Defender ---
+        - uuid: 40000000000000000000000000000019
+          name: 'Microsoft: Defender status'
+          type: DEPENDENT
+          key: ms.health.defender
+          delay: '0'
+          value_type: TEXT
+          description: 'Status van Microsoft Defender'
+          preprocessing:
+            - type: JSONPATH
+              parameters:
+                - '$.value[?(@.service=="Microsoft Defender XDR")].status.first()'
+              error_handler: CUSTOM_VALUE
+              error_handler_params: 'unknown'
+          master_item:
+            key: ms.health.raw
+          triggers:
+            - uuid: 50000000000000000000000000000019
+              expression: 'last(/Microsoft Cloud Health/ms.health.defender)<>"serviceOperational" and last(/Microsoft Cloud Health/ms.health.defender)<>"unknown"'
+              name: 'Microsoft: Defender niet operational ({ITEM.LASTVALUE1})'
+              priority: HIGH
+              description: 'Microsoft Defender meldt een probleem. Security monitoring kan verstoord zijn.'
+
+        # -----------------------------------------------------------
+        # Master item: Active Issues
+        # -----------------------------------------------------------
+        - uuid: 40000000000000000000000000000030
+          name: 'Microsoft: Active Issues raw'
+          type: HTTP_AGENT
+          key: ms.issues.raw
+          delay: '{$MS.STATUS.INTERVAL}'
+          history: 0d
+          trends: 0d
+          value_type: TEXT
+          url: '{$MS.GRAPH.URL}/admin/serviceAnnouncement/issues?$filter=isResolved eq false'
+          headers:
+            - name: Authorization
+              value: 'Bearer {last(/Microsoft Cloud Health/ms.auth.token)}'
+            - name: Content-Type
+              value: application/json
+          description: 'Alle actieve (onopgeloste) Microsoft service issues'
+          tags:
+            - tag: component
+              value: microsoft
+
+        - uuid: 40000000000000000000000000000031
+          name: 'Microsoft: Aantal actieve issues'
+          type: DEPENDENT
+          key: ms.issues.count
+          delay: '0'
+          value_type: UNSIGNED
+          description: 'Aantal onopgeloste service issues'
+          preprocessing:
+            - type: JSONPATH
+              parameters:
+                - '$.value.length()'
+              error_handler: CUSTOM_VALUE
+              error_handler_params: '0'
+          master_item:
+            key: ms.issues.raw
+          triggers:
+            - uuid: 50000000000000000000000000000031
+              expression: 'last(/Microsoft Cloud Health/ms.issues.count)>0'
+              name: 'Microsoft: {ITEM.LASTVALUE1} actieve service issue(s)'
+              priority: WARNING
+              description: 'Er zijn actieve Microsoft service issues. Controleer de details in het Microsoft 365 admin center.'
+
+        # -----------------------------------------------------------
+        # Actieve checks: login.microsoftonline.com
+        # -----------------------------------------------------------
+        - uuid: 40000000000000000000000000000040
+          name: 'Microsoft: Login endpoint HTTP status'
+          type: HTTP_AGENT
+          key: ms.http.login.status
+          delay: '2m'
+          value_type: UNSIGNED
+          url: 'https://login.microsoftonline.com/common/v2.0/.well-known/openid-configuration'
+          retrieve_mode: HEADERS
+          description: 'HTTP status code van het Azure AD login endpoint'
+          preprocessing:
+            - type: REGEX
+              parameters:
+                - 'HTTP/\d\.?\d?\s(\d{3})'
+                - '\1'
+          tags:
+            - tag: component
+              value: microsoft-auth
+          triggers:
+            - uuid: 50000000000000000000000000000040
+              expression: 'last(/Microsoft Cloud Health/ms.http.login.status)<>200'
+              name: 'Microsoft: login.microsoftonline.com onbereikbaar ({ITEM.LASTVALUE1})'
+              priority: DISASTER
+              description: 'Azure AD login endpoint is niet bereikbaar. Authenticatie voor alle Microsoft diensten kan verstoord zijn.'
+
+        - uuid: 40000000000000000000000000000041
+          name: 'Microsoft: Login endpoint response time'
+          type: HTTP_AGENT
+          key: ms.http.login.resptime
+          delay: '2m'
+          value_type: FLOAT
+          units: s
+          url: 'https://login.microsoftonline.com/common/v2.0/.well-known/openid-configuration'
+          retrieve_mode: HEADERS
+          description: 'Response time van het Azure AD login endpoint'
+          tags:
+            - tag: component
+              value: microsoft-auth
+          triggers:
+            - uuid: 50000000000000000000000000000041
+              expression: 'last(/Microsoft Cloud Health/ms.http.login.resptime)>3'
+              name: 'Microsoft: Login endpoint response time hoog ({ITEM.LASTVALUE1}s)'
+              priority: WARNING
+
+        # -----------------------------------------------------------
+        # Actieve checks: outlook.office365.com
+        # -----------------------------------------------------------
+        - uuid: 40000000000000000000000000000042
+          name: 'Microsoft: Outlook endpoint HTTP status'
+          type: HTTP_AGENT
+          key: ms.http.outlook.status
+          delay: '2m'
+          value_type: UNSIGNED
+          url: 'https://outlook.office365.com/owa/healthcheck.htm'
+          retrieve_mode: HEADERS
+          description: 'HTTP status van Outlook Web App healthcheck'
+          preprocessing:
+            - type: REGEX
+              parameters:
+                - 'HTTP/\d\.?\d?\s(\d{3})'
+                - '\1'
+          tags:
+            - tag: component
+              value: microsoft-exchange
+          triggers:
+            - uuid: 50000000000000000000000000000042
+              expression: 'last(/Microsoft Cloud Health/ms.http.outlook.status)<>200'
+              name: 'Microsoft: Outlook Web onbereikbaar ({ITEM.LASTVALUE1})'
+              priority: HIGH
+
+        # -----------------------------------------------------------
+        # Actieve checks: portal.azure.com
+        # -----------------------------------------------------------
+        - uuid: 40000000000000000000000000000043
+          name: 'Microsoft: Azure Portal HTTP status'
+          type: HTTP_AGENT
+          key: ms.http.portal.status
+          delay: '5m'
+          value_type: UNSIGNED
+          url: 'https://portal.azure.com'
+          retrieve_mode: HEADERS
+          description: 'HTTP status van Azure Portal'
+          preprocessing:
+            - type: REGEX
+              parameters:
+                - 'HTTP/\d\.?\d?\s(\d{3})'
+                - '\1'
+          tags:
+            - tag: component
+              value: microsoft-azure
+          triggers:
+            - uuid: 50000000000000000000000000000043
+              expression: 'last(/Microsoft Cloud Health/ms.http.portal.status)<>200 and last(/Microsoft Cloud Health/ms.http.portal.status)<>302'
+              name: 'Microsoft: Azure Portal onbereikbaar ({ITEM.LASTVALUE1})'
+              priority: HIGH
+
+      # ===========================================================
+      # DASHBOARDS
+      # ===========================================================
+      dashboards:
+        - uuid: 60000000000000000000000000000001
+          name: 'Microsoft Cloud Health'
+          pages:
+            - widgets:
+                - type: PLAIN_TEXT
+                  name: 'Service Health Status'
+                  width: '12'
+                  height: '8'
+                  fields:
+                    - type: ITEM
+                      name: itemids
+                      value:
+                        host: 'Microsoft Cloud Health'
+                        key: ms.health.exchange
+                    - type: ITEM
+                      name: itemids
+                      value:
+                        host: 'Microsoft Cloud Health'
+                        key: ms.health.teams
+                    - type: ITEM
+                      name: itemids
+                      value:
+                        host: 'Microsoft Cloud Health'
+                        key: ms.health.sharepoint
+                    - type: ITEM
+                      name: itemids
+                      value:
+                        host: 'Microsoft Cloud Health'
+                        key: ms.health.entra
+                    - type: ITEM
+                      name: itemids
+                      value:
+                        host: 'Microsoft Cloud Health'
+                        key: ms.health.intune
+                    - type: ITEM
+                      name: itemids
+                      value:
+                        host: 'Microsoft Cloud Health'
+                        key: ms.health.avd
+                    - type: ITEM
+                      name: itemids
+                      value:
+                        host: 'Microsoft Cloud Health'
+                        key: ms.health.defender
+                    - type: ITEM
+                      name: itemids
+                      value:
+                        host: 'Microsoft Cloud Health'
+                        key: ms.health.onedrive
+                    - type: ITEM
+                      name: itemids
+                      value:
+                        host: 'Microsoft Cloud Health'
+                        key: ms.health.m365apps
+                    - type: INTEGER
+                      name: show_lines
+                      value: '15'
+
+                - type: ITEM
+                  name: 'Actieve Issues'
+                  x: '12'
+                  width: '12'
+                  height: '3'
+                  fields:
+                    - type: ITEM
+                      name: itemid
+                      value:
+                        host: 'Microsoft Cloud Health'
+                        key: ms.issues.count
+
+                - type: GRAPH_CLASSIC
+                  name: 'Login Response Time'
+                  x: '12'
+                  y: '3'
+                  width: '12'
+                  height: '5'
+                  fields:
+                    - type: ITEM
+                      name: itemids
+                      value:
+                        host: 'Microsoft Cloud Health'
+                        key: ms.http.login.resptime
+
+                - type: PROBLEMS
+                  name: 'Actieve Problemen'
+                  y: '8'
+                  width: '24'
+                  height: '4'
+                  fields:
+                    - type: STRING
+                      name: tags.tag.0
+                      value: component
+                    - type: STRING
+                      name: tags.value.0
+                      value: microsoft

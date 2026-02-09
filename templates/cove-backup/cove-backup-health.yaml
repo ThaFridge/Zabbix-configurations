@@ -1,0 +1,449 @@
+zabbix_export:
+  version: '7.0'
+  template_groups:
+    - uuid: 7df96b18c230490a9a0a9e2307226340
+      name: 'Templates/Backup'
+
+  templates:
+    - uuid: c1d2e3f4a5b6c7d8e9f0a1b2c3d4e5f6
+      name: 'Cove Data Protection'
+      description: |
+        Monitor N-able Cove Data Protection (backup) via de JSON-RPC API.
+        Ontdekt automatisch alle backup devices en monitort per device:
+        - Laatste backup status
+        - Aantal fouten en waarschuwingen
+        - Laatste succesvolle backup timestamp
+        - Gebruikte opslag
+
+        Vereist een Cove API user account.
+        Stel de macros {$COVE.PARTNER}, {$COVE.USER} en {$COVE.PASSWORD} in.
+      groups:
+        - name: 'Templates/Backup'
+
+      macros:
+        - macro: '{$COVE.PARTNER}'
+          value: ''
+          description: 'Cove partner/company naam (zoals in management console)'
+        - macro: '{$COVE.USER}'
+          value: ''
+          description: 'Cove API gebruiker (email)'
+        - macro: '{$COVE.PASSWORD}'
+          value: ''
+          type: SECRET_TEXT
+          description: 'Cove API gebruiker wachtwoord'
+        - macro: '{$COVE.API.URL}'
+          value: 'https://api.backup.management/jsonapi'
+          description: 'Cove JSON-RPC API endpoint'
+        - macro: '{$COVE.INTERVAL}'
+          value: '15m'
+          description: 'Poll interval voor backup status'
+        - macro: '{$COVE.BACKUP.MAX_AGE_HOURS}'
+          value: '26'
+          description: 'Max uren sinds laatste succesvolle backup voordat een warning triggert'
+        - macro: '{$COVE.BACKUP.CRITICAL_AGE_HOURS}'
+          value: '48'
+          description: 'Max uren sinds laatste succesvolle backup voordat een high trigger afgaat'
+
+      # ===========================================================
+      # ITEMS
+      # ===========================================================
+      items:
+        # -----------------------------------------------------------
+        # Login: Visa token ophalen
+        # -----------------------------------------------------------
+        - uuid: 70000000000000000000000000000001
+          name: 'Cove: Login visa token'
+          type: HTTP_AGENT
+          key: cove.auth.visa
+          delay: '10m'
+          history: 0d
+          trends: 0d
+          value_type: TEXT
+          url: '{$COVE.API.URL}'
+          request_method: POST
+          post_type: JSON
+          posts: |
+            {
+              "jsonrpc": "2.0",
+              "method": "Login",
+              "params": {
+                "partner": "{$COVE.PARTNER}",
+                "username": "{$COVE.USER}",
+                "password": "{$COVE.PASSWORD}"
+              },
+              "id": "1"
+            }
+          headers:
+            - name: Content-Type
+              value: application/json
+          description: 'Logt in bij Cove API en haalt een visa token op (geldig 15 min)'
+          preprocessing:
+            - type: JSONPATH
+              parameters:
+                - '$.visa'
+          tags:
+            - tag: component
+              value: cove-auth
+
+        # -----------------------------------------------------------
+        # Master item: Alle devices met statistieken
+        # -----------------------------------------------------------
+        - uuid: 70000000000000000000000000000010
+          name: 'Cove: All devices raw'
+          type: HTTP_AGENT
+          key: cove.devices.raw
+          delay: '{$COVE.INTERVAL}'
+          history: 0d
+          trends: 0d
+          value_type: TEXT
+          url: '{$COVE.API.URL}'
+          request_method: POST
+          post_type: JSON
+          posts: |
+            {
+              "jsonrpc": "2.0",
+              "visa": "{last(/Cove Data Protection/cove.auth.visa)}",
+              "method": "EnumerateAccountStatistics",
+              "params": {
+                "query": {
+                  "PartnerId": -1,
+                  "Filter": "",
+                  "Columns": ["I1","I16","I18","I32","I78","I14","F00","F06","F07","F09"],
+                  "StartRecordNumber": 0,
+                  "RecordsCount": 500,
+                  "Totals": ["I14"]
+                }
+              },
+              "id": "2"
+            }
+          headers:
+            - name: Content-Type
+              value: application/json
+          description: |
+            Haalt alle backup devices op met statistieken.
+            Columns: I1=DeviceName, I16=OS, I18=ComputerName, I32=OSType,
+            I78=ActiveDataSources, I14=UsedStorage,
+            F00=LastSessionStatus, F06=ErrorCount, F07=WarningCount, F09=LastSuccessTimestamp
+          tags:
+            - tag: component
+              value: cove
+
+        # -----------------------------------------------------------
+        # Visa updaten uit response (visa chain)
+        # -----------------------------------------------------------
+        - uuid: 70000000000000000000000000000011
+          name: 'Cove: Visa from last response'
+          type: DEPENDENT
+          key: cove.auth.visa.chain
+          delay: '0'
+          history: 0d
+          trends: 0d
+          value_type: TEXT
+          description: 'Visa token uit de laatste API response (voor visa chain)'
+          preprocessing:
+            - type: JSONPATH
+              parameters:
+                - '$.visa'
+              error_handler: DISCARD_VALUE
+          master_item:
+            key: cove.devices.raw
+
+        # -----------------------------------------------------------
+        # Totaal aantal devices
+        # -----------------------------------------------------------
+        - uuid: 70000000000000000000000000000012
+          name: 'Cove: Totaal aantal devices'
+          type: DEPENDENT
+          key: cove.devices.count
+          delay: '0'
+          value_type: UNSIGNED
+          description: 'Totaal aantal backup devices in Cove'
+          preprocessing:
+            - type: JSONPATH
+              parameters:
+                - '$.result.result.length()'
+              error_handler: CUSTOM_VALUE
+              error_handler_params: '0'
+          master_item:
+            key: cove.devices.raw
+
+        # -----------------------------------------------------------
+        # Totaal gebruikte opslag
+        # -----------------------------------------------------------
+        - uuid: 70000000000000000000000000000013
+          name: 'Cove: Totaal gebruikte opslag'
+          type: DEPENDENT
+          key: cove.storage.total
+          delay: '0'
+          value_type: UNSIGNED
+          units: B
+          description: 'Totale gebruikte cloud opslag in bytes'
+          preprocessing:
+            - type: JSONPATH
+              parameters:
+                - '$.result.totalStatistics.I14'
+              error_handler: CUSTOM_VALUE
+              error_handler_params: '0'
+          master_item:
+            key: cove.devices.raw
+
+      # ===========================================================
+      # LLD: Automatische device discovery
+      # ===========================================================
+      discovery_rules:
+        - uuid: 80000000000000000000000000000001
+          name: 'Cove: Backup device discovery'
+          type: DEPENDENT
+          key: cove.device.discovery
+          delay: '0'
+          description: 'Ontdekt automatisch alle backup devices in Cove'
+          item_prototypes:
+
+            # --- Device naam ---
+            - uuid: 80000000000000000000000000000010
+              name: 'Cove: [{#DEVICE.NAME}] Computer name'
+              type: DEPENDENT
+              key: 'cove.device.computer[{#DEVICE.ID}]'
+              delay: '0'
+              value_type: TEXT
+              description: 'Computer naam van het backup device'
+              preprocessing:
+                - type: JSONPATH
+                  parameters:
+                    - '$.result.result[?(@.AccountID=={#DEVICE.ID})].I18.first()'
+                  error_handler: CUSTOM_VALUE
+                  error_handler_params: 'unknown'
+              master_item:
+                key: cove.devices.raw
+
+            # --- Laatste sessie status ---
+            - uuid: 80000000000000000000000000000011
+              name: 'Cove: [{#DEVICE.NAME}] Laatste backup status'
+              type: DEPENDENT
+              key: 'cove.device.status[{#DEVICE.ID}]'
+              delay: '0'
+              value_type: UNSIGNED
+              description: |
+                Laatste backup sessie status.
+                1=In progress, 2=Failed, 3=Aborted, 5=Completed,
+                6=Interrupted, 7=Not started, 8=Completed with errors,
+                9=In progress (image), 10=Over quota, 11=No selection,
+                12=Restarted
+              preprocessing:
+                - type: JSONPATH
+                  parameters:
+                    - '$.result.result[?(@.AccountID=={#DEVICE.ID})].F00.first()'
+                  error_handler: CUSTOM_VALUE
+                  error_handler_params: '0'
+              master_item:
+                key: cove.devices.raw
+              trigger_prototypes:
+                - uuid: 90000000000000000000000000000001
+                  expression: 'last(/Cove Data Protection/cove.device.status[{#DEVICE.ID}])=2'
+                  name: 'Cove: [{#DEVICE.NAME}] Backup FAILED'
+                  priority: HIGH
+                  description: 'De laatste backup van {#DEVICE.NAME} is mislukt.'
+                - uuid: 90000000000000000000000000000002
+                  expression: 'last(/Cove Data Protection/cove.device.status[{#DEVICE.ID}])=3'
+                  name: 'Cove: [{#DEVICE.NAME}] Backup ABORTED'
+                  priority: HIGH
+                  description: 'De laatste backup van {#DEVICE.NAME} is afgebroken.'
+                - uuid: 90000000000000000000000000000003
+                  expression: 'last(/Cove Data Protection/cove.device.status[{#DEVICE.ID}])=8'
+                  name: 'Cove: [{#DEVICE.NAME}] Backup completed with errors'
+                  priority: WARNING
+                  description: 'De laatste backup van {#DEVICE.NAME} is voltooid maar met fouten.'
+                - uuid: 90000000000000000000000000000004
+                  expression: 'last(/Cove Data Protection/cove.device.status[{#DEVICE.ID}])=7'
+                  name: 'Cove: [{#DEVICE.NAME}] Backup not started'
+                  priority: WARNING
+                  description: 'De backup van {#DEVICE.NAME} is niet gestart.'
+                - uuid: 90000000000000000000000000000005
+                  expression: 'last(/Cove Data Protection/cove.device.status[{#DEVICE.ID}])=10'
+                  name: 'Cove: [{#DEVICE.NAME}] Over quota'
+                  priority: WARNING
+                  description: '{#DEVICE.NAME} heeft het opslagquotum overschreden.'
+
+            # --- Fouten count ---
+            - uuid: 80000000000000000000000000000012
+              name: 'Cove: [{#DEVICE.NAME}] Aantal fouten'
+              type: DEPENDENT
+              key: 'cove.device.errors[{#DEVICE.ID}]'
+              delay: '0'
+              value_type: UNSIGNED
+              description: 'Aantal fouten in de laatste backup sessie'
+              preprocessing:
+                - type: JSONPATH
+                  parameters:
+                    - '$.result.result[?(@.AccountID=={#DEVICE.ID})].F06.first()'
+                  error_handler: CUSTOM_VALUE
+                  error_handler_params: '0'
+              master_item:
+                key: cove.devices.raw
+
+            # --- Waarschuwingen count ---
+            - uuid: 80000000000000000000000000000013
+              name: 'Cove: [{#DEVICE.NAME}] Aantal waarschuwingen'
+              type: DEPENDENT
+              key: 'cove.device.warnings[{#DEVICE.ID}]'
+              delay: '0'
+              value_type: UNSIGNED
+              description: 'Aantal waarschuwingen in de laatste backup sessie'
+              preprocessing:
+                - type: JSONPATH
+                  parameters:
+                    - '$.result.result[?(@.AccountID=={#DEVICE.ID})].F07.first()'
+                  error_handler: CUSTOM_VALUE
+                  error_handler_params: '0'
+              master_item:
+                key: cove.devices.raw
+
+            # --- Laatste succesvolle backup timestamp ---
+            - uuid: 80000000000000000000000000000014
+              name: 'Cove: [{#DEVICE.NAME}] Laatste succesvolle backup'
+              type: DEPENDENT
+              key: 'cove.device.last_success[{#DEVICE.ID}]'
+              delay: '0'
+              value_type: UNSIGNED
+              units: unixtime
+              description: 'Unix timestamp van de laatste succesvolle backup'
+              preprocessing:
+                - type: JSONPATH
+                  parameters:
+                    - '$.result.result[?(@.AccountID=={#DEVICE.ID})].F09.first()'
+                  error_handler: CUSTOM_VALUE
+                  error_handler_params: '0'
+              master_item:
+                key: cove.devices.raw
+              trigger_prototypes:
+                - uuid: 90000000000000000000000000000010
+                  expression: '(now()-last(/Cove Data Protection/cove.device.last_success[{#DEVICE.ID}]))>{$COVE.BACKUP.MAX_AGE_HOURS}*3600 and last(/Cove Data Protection/cove.device.last_success[{#DEVICE.ID}])>0'
+                  name: 'Cove: [{#DEVICE.NAME}] Geen succesvolle backup in {$COVE.BACKUP.MAX_AGE_HOURS}h'
+                  priority: WARNING
+                  description: 'De laatste succesvolle backup van {#DEVICE.NAME} is meer dan {$COVE.BACKUP.MAX_AGE_HOURS} uur geleden.'
+                - uuid: 90000000000000000000000000000011
+                  expression: '(now()-last(/Cove Data Protection/cove.device.last_success[{#DEVICE.ID}]))>{$COVE.BACKUP.CRITICAL_AGE_HOURS}*3600 and last(/Cove Data Protection/cove.device.last_success[{#DEVICE.ID}])>0'
+                  name: 'Cove: [{#DEVICE.NAME}] Geen succesvolle backup in {$COVE.BACKUP.CRITICAL_AGE_HOURS}h'
+                  priority: HIGH
+                  description: 'De laatste succesvolle backup van {#DEVICE.NAME} is meer dan {$COVE.BACKUP.CRITICAL_AGE_HOURS} uur geleden. Urgente actie vereist.'
+
+            # --- Gebruikte opslag ---
+            - uuid: 80000000000000000000000000000015
+              name: 'Cove: [{#DEVICE.NAME}] Gebruikte opslag'
+              type: DEPENDENT
+              key: 'cove.device.storage[{#DEVICE.ID}]'
+              delay: '0'
+              value_type: UNSIGNED
+              units: B
+              description: 'Gebruikte cloud opslag door dit device in bytes'
+              preprocessing:
+                - type: JSONPATH
+                  parameters:
+                    - '$.result.result[?(@.AccountID=={#DEVICE.ID})].I14.first()'
+                  error_handler: CUSTOM_VALUE
+                  error_handler_params: '0'
+              master_item:
+                key: cove.devices.raw
+
+            # --- OS type ---
+            - uuid: 80000000000000000000000000000016
+              name: 'Cove: [{#DEVICE.NAME}] OS type'
+              type: DEPENDENT
+              key: 'cove.device.os[{#DEVICE.ID}]'
+              delay: '0'
+              value_type: TEXT
+              description: 'Besturingssysteem van het device'
+              preprocessing:
+                - type: JSONPATH
+                  parameters:
+                    - '$.result.result[?(@.AccountID=={#DEVICE.ID})].I16.first()'
+                  error_handler: CUSTOM_VALUE
+                  error_handler_params: 'unknown'
+              master_item:
+                key: cove.devices.raw
+
+            # --- Actieve data sources ---
+            - uuid: 80000000000000000000000000000017
+              name: 'Cove: [{#DEVICE.NAME}] Actieve data sources'
+              type: DEPENDENT
+              key: 'cove.device.datasources[{#DEVICE.ID}]'
+              delay: '0'
+              value_type: TEXT
+              description: 'Actieve data sources (bijv. Files, SystemState, VMware, etc.)'
+              preprocessing:
+                - type: JSONPATH
+                  parameters:
+                    - '$.result.result[?(@.AccountID=={#DEVICE.ID})].I78.first()'
+                  error_handler: CUSTOM_VALUE
+                  error_handler_params: 'none'
+              master_item:
+                key: cove.devices.raw
+
+          # LLD preprocessing: maak discovery array van de raw data
+          preprocessing:
+            - type: JSONPATH
+              parameters:
+                - '$.result.result'
+            - type: JAVASCRIPT
+              parameters:
+                - |
+                  var data = JSON.parse(value);
+                  var result = [];
+                  for (var i = 0; i < data.length; i++) {
+                    result.push({
+                      "{#DEVICE.ID}": data[i].AccountID,
+                      "{#DEVICE.NAME}": data[i].I1 || "Unknown"
+                    });
+                  }
+                  return JSON.stringify(result);
+          master_item:
+            key: cove.devices.raw
+          lld_macro_paths:
+            - lld_macro: '{#DEVICE.ID}'
+              path: '$."{#DEVICE.ID}"'
+            - lld_macro: '{#DEVICE.NAME}'
+              path: '$."{#DEVICE.NAME}"'
+
+      # ===========================================================
+      # DASHBOARDS
+      # ===========================================================
+      dashboards:
+        - uuid: 71000000000000000000000000000001
+          name: 'Cove Backup Overview'
+          pages:
+            - widgets:
+                - type: ITEM
+                  name: 'Totaal devices'
+                  width: '6'
+                  height: '3'
+                  fields:
+                    - type: ITEM
+                      name: itemid
+                      value:
+                        host: 'Cove Data Protection'
+                        key: cove.devices.count
+
+                - type: ITEM
+                  name: 'Totale opslag'
+                  x: '6'
+                  width: '6'
+                  height: '3'
+                  fields:
+                    - type: ITEM
+                      name: itemid
+                      value:
+                        host: 'Cove Data Protection'
+                        key: cove.storage.total
+
+                - type: PROBLEMS
+                  name: 'Backup Problemen'
+                  y: '3'
+                  width: '24'
+                  height: '6'
+                  fields:
+                    - type: STRING
+                      name: tags.tag.0
+                      value: component
+                    - type: STRING
+                      name: tags.value.0
+                      value: cove
