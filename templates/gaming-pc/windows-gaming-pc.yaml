@@ -1,0 +1,698 @@
+zabbix_export:
+  version: '7.0'
+  template_groups:
+    - uuid: 32c0d183380147b7af912b7d03c6e7f7
+      name: 'Templates/Gaming'
+
+  templates:
+    - uuid: 84b7a60f477a433d8b771425aa600808
+      template: 'Windows Gaming PC'
+      name: 'Windows Gaming PC'
+      description: |
+        Monitor een Windows gaming PC via Zabbix Agent 2.
+        Bewaakt AMD GPU services, gaming services (Steam, Xbox, Epic, GOG),
+        Windows core services, systeem performance en netwerk latency naar game servers.
+
+        Vereist: Zabbix Agent 2 geinstalleerd op de gaming PC.
+        Ping checks draaien als Simple Checks op de Zabbix Server/Proxy.
+      groups:
+        - name: 'Templates/Gaming'
+
+      macros:
+        - macro: '{$GAMING.SERVICE.INTERVAL}'
+          value: '1m'
+          description: 'Poll interval voor service en proces checks'
+        - macro: '{$GAMING.PERF.INTERVAL}'
+          value: '1m'
+          description: 'Poll interval voor performance metrics (CPU, RAM, disk)'
+        - macro: '{$GAMING.PING.INTERVAL}'
+          value: '1m'
+          description: 'Poll interval voor game server ping checks'
+        - macro: '{$GAMING.CPU.UTIL.WARN}'
+          value: '95'
+          description: 'CPU gebruik warning drempel in procent'
+        - macro: '{$GAMING.RAM.AVAIL.WARN}'
+          value: '10'
+          description: 'RAM beschikbaar warning drempel in procent'
+        - macro: '{$GAMING.DISK.FREE.WARN}'
+          value: '10'
+          description: 'Disk vrije ruimte warning drempel in procent'
+        - macro: '{$GAMING.DISK.FREE.HIGH}'
+          value: '5'
+          description: 'Disk vrije ruimte high severity drempel in procent'
+        - macro: '{$GAMING.DISK.PATH}'
+          value: 'C:'
+          description: 'Schijfletter om te monitoren (bijv. C: of D: voor game drive)'
+        - macro: '{$GAMING.PING.WARN}'
+          value: '0.050'
+          description: 'Ping latency warning drempel in seconden (50ms)'
+        - macro: '{$GAMING.PING.HIGH}'
+          value: '0.100'
+          description: 'Ping latency high severity drempel in seconden (100ms)'
+        - macro: '{$GAMING.GAMESERVER.1}'
+          value: '1.1.1.1'
+          description: 'Game server #1 IP - standaard Cloudflare DNS (algemene latency baseline)'
+        - macro: '{$GAMING.GAMESERVER.2}'
+          value: '155.133.248.34'
+          description: 'Game server #2 IP - standaard Valve/Steam Amsterdam'
+        - macro: '{$GAMING.GAMESERVER.3}'
+          value: '8.8.8.8'
+          description: 'Game server #3 IP - standaard Google DNS (secundaire baseline)'
+
+      # ===========================================================
+      # ITEMS
+      # ===========================================================
+      items:
+        # -----------------------------------------------------------
+        # AMD GPU SERVICES
+        # -----------------------------------------------------------
+        - uuid: 977fb8b93a624a5cbd6eca01018a28d3
+          name: 'GPU: AMD External Events Utility'
+          type: ZABBIX_PASSIVE
+          key: 'service.info[AMD External Events Utility,state]'
+          delay: '{$GAMING.SERVICE.INTERVAL}'
+          value_type: UNSIGNED
+          description: 'AMD GPU event handling service. Moet draaien voor correct GPU gedrag en Adrenalin software.'
+          valuemap:
+            name: 'Windows service state'
+          tags:
+            - tag: component
+              value: gpu
+          triggers:
+            - uuid: 96bea6a8dba8428e86b2de34f2188836
+              expression: 'last(/Windows Gaming PC/service.info[AMD External Events Utility,state])<>0'
+              name: 'GPU: AMD External Events Utility niet actief'
+              priority: WARNING
+              description: 'AMD GPU event service draait niet. GPU functionaliteit en Adrenalin software kunnen beperkt zijn.'
+
+        # -----------------------------------------------------------
+        # GAMING SERVICES - Steam
+        # -----------------------------------------------------------
+        - uuid: 79a62d8666634f40b30a07c2174485f7
+          name: 'Gaming: Steam Client Service'
+          type: ZABBIX_PASSIVE
+          key: 'service.info[Steam Client Service,state]'
+          delay: '{$GAMING.SERVICE.INTERVAL}'
+          value_type: UNSIGNED
+          description: 'Steam client achtergrond service voor auto-updates en downloads.'
+          valuemap:
+            name: 'Windows service state'
+          tags:
+            - tag: component
+              value: gaming
+
+        - uuid: 0e8b2155f28d4954b5f40e2a9c78a3a7
+          name: 'Gaming: Steam proces actief'
+          type: ZABBIX_PASSIVE
+          key: 'proc.num[steam.exe]'
+          delay: '{$GAMING.SERVICE.INTERVAL}'
+          value_type: UNSIGNED
+          description: 'Aantal actieve Steam processen. 0 = Steam is niet gestart.'
+          tags:
+            - tag: component
+              value: gaming
+
+        # -----------------------------------------------------------
+        # GAMING SERVICES - Epic Games
+        # -----------------------------------------------------------
+        - uuid: 56b8f024054748198726cff783649632
+          name: 'Gaming: Epic Games Launcher actief'
+          type: ZABBIX_PASSIVE
+          key: 'proc.num[EpicGamesLauncher.exe]'
+          delay: '{$GAMING.SERVICE.INTERVAL}'
+          value_type: UNSIGNED
+          description: 'Aantal actieve Epic Games Launcher processen. 0 = Epic is niet gestart.'
+          tags:
+            - tag: component
+              value: gaming
+
+        # -----------------------------------------------------------
+        # GAMING SERVICES - Xbox / Game Pass
+        # -----------------------------------------------------------
+        - uuid: 045ed3c9dbf845ed85aa3fed73144b97
+          name: 'Gaming: Xbox Gaming Services'
+          type: ZABBIX_PASSIVE
+          key: 'service.info[GamingServices,state]'
+          delay: '{$GAMING.SERVICE.INTERVAL}'
+          value_type: UNSIGNED
+          description: 'Xbox Gaming Services - vereist voor Xbox Game Pass en Microsoft Store games.'
+          valuemap:
+            name: 'Windows service state'
+          tags:
+            - tag: component
+              value: gaming
+
+        - uuid: 918dc4b28a234c249cda5f15800034ef
+          name: 'Gaming: Xbox Live Auth Manager'
+          type: ZABBIX_PASSIVE
+          key: 'service.info[XblAuthManager,state]'
+          delay: '{$GAMING.SERVICE.INTERVAL}'
+          value_type: UNSIGNED
+          description: 'Xbox Live authenticatie - nodig voor online gaming, achievements en Game Pass.'
+          valuemap:
+            name: 'Windows service state'
+          tags:
+            - tag: component
+              value: gaming
+
+        - uuid: 6db5136b87be480788f73d39e99972ad
+          name: 'Gaming: Xbox Live Game Save'
+          type: ZABBIX_PASSIVE
+          key: 'service.info[XblGameSave,state]'
+          delay: '{$GAMING.SERVICE.INTERVAL}'
+          value_type: UNSIGNED
+          description: 'Xbox Live cloud save synchronisatie voor game voortgang.'
+          valuemap:
+            name: 'Windows service state'
+          tags:
+            - tag: component
+              value: gaming
+
+        # -----------------------------------------------------------
+        # GAMING SERVICES - GOG Galaxy
+        # -----------------------------------------------------------
+        - uuid: c4a06e4a565c4210b547e1edb8194529
+          name: 'Gaming: GOG Galaxy actief'
+          type: ZABBIX_PASSIVE
+          key: 'proc.num[GalaxyClient.exe]'
+          delay: '{$GAMING.SERVICE.INTERVAL}'
+          value_type: UNSIGNED
+          description: 'Aantal actieve GOG Galaxy client processen. 0 = GOG Galaxy is niet gestart.'
+          tags:
+            - tag: component
+              value: gaming
+
+        # -----------------------------------------------------------
+        # WINDOWS CORE SERVICES
+        # -----------------------------------------------------------
+        - uuid: 6971d58dee69445d8dc0518039d3e7a5
+          name: 'Windows: Defender Antivirus Service'
+          type: ZABBIX_PASSIVE
+          key: 'service.info[WinDefend,state]'
+          delay: '{$GAMING.SERVICE.INTERVAL}'
+          value_type: UNSIGNED
+          description: 'Windows Defender antivirus realtime bescherming.'
+          valuemap:
+            name: 'Windows service state'
+          tags:
+            - tag: component
+              value: windows
+          triggers:
+            - uuid: 94a13f563889425c93de76b2e4814ec0
+              expression: 'last(/Windows Gaming PC/service.info[WinDefend,state])<>0'
+              name: 'Windows: Defender Antivirus niet actief'
+              priority: HIGH
+              description: 'Windows Defender draait niet. Het systeem is onbeschermd tegen malware.'
+
+        - uuid: 5097066b55804a0bb2677fda5e9119bf
+          name: 'Windows: Firewall Service'
+          type: ZABBIX_PASSIVE
+          key: 'service.info[mpssvc,state]'
+          delay: '{$GAMING.SERVICE.INTERVAL}'
+          value_type: UNSIGNED
+          description: 'Windows Defender Firewall - beschermt tegen ongewenste netwerkverbindingen.'
+          valuemap:
+            name: 'Windows service state'
+          tags:
+            - tag: component
+              value: windows
+          triggers:
+            - uuid: ff530ef5895f4a879624f6055e1f8cb5
+              expression: 'last(/Windows Gaming PC/service.info[mpssvc,state])<>0'
+              name: 'Windows: Firewall niet actief'
+              priority: HIGH
+              description: 'Windows Firewall draait niet. Het systeem is kwetsbaar voor netwerkaanvallen.'
+
+        - uuid: 6fc441745b754d6a92ac8d43f880fb00
+          name: 'Windows: Audio Service'
+          type: ZABBIX_PASSIVE
+          key: 'service.info[Audiosrv,state]'
+          delay: '{$GAMING.SERVICE.INTERVAL}'
+          value_type: UNSIGNED
+          description: 'Windows Audio service - nodig voor game geluid en voice chat.'
+          valuemap:
+            name: 'Windows service state'
+          tags:
+            - tag: component
+              value: windows
+          triggers:
+            - uuid: 45e8a5114eaf4c9fbf2e362f14b53f42
+              expression: 'last(/Windows Gaming PC/service.info[Audiosrv,state])<>0'
+              name: 'Windows: Audio Service niet actief'
+              priority: WARNING
+              description: 'Windows Audio draait niet. Geen geluid bij games en voice chat werkt niet.'
+
+        - uuid: 01401a455430475c884f131bd2119a63
+          name: 'Windows: DNS Client'
+          type: ZABBIX_PASSIVE
+          key: 'service.info[Dnscache,state]'
+          delay: '{$GAMING.SERVICE.INTERVAL}'
+          value_type: UNSIGNED
+          description: 'DNS Client cache service - versnelt DNS lookups voor snellere verbindingen.'
+          valuemap:
+            name: 'Windows service state'
+          tags:
+            - tag: component
+              value: windows
+          triggers:
+            - uuid: 4e0b8f8d4bdf4872ac1e4a81d47df5c4
+              expression: 'last(/Windows Gaming PC/service.info[Dnscache,state])<>0'
+              name: 'Windows: DNS Client niet actief'
+              priority: WARNING
+              description: 'DNS Client service draait niet. Kan leiden tot trage of falende DNS lookups bij online games.'
+
+        - uuid: 4a2bfae262f44db9a3b94b9fdc259107
+          name: 'Windows: DHCP Client'
+          type: ZABBIX_PASSIVE
+          key: 'service.info[Dhcp,state]'
+          delay: '{$GAMING.SERVICE.INTERVAL}'
+          value_type: UNSIGNED
+          description: 'DHCP Client - verkrijgt automatisch IP-adres van de router.'
+          valuemap:
+            name: 'Windows service state'
+          tags:
+            - tag: component
+              value: windows
+
+        - uuid: 9934215c9967472386d6355916d6ad61
+          name: 'Windows: Update Service'
+          type: ZABBIX_PASSIVE
+          key: 'service.info[wuauserv,state]'
+          delay: '{$GAMING.SERVICE.INTERVAL}'
+          value_type: UNSIGNED
+          description: 'Windows Update service. Let op: deze stopt regelmatig na updates, dat is normaal gedrag.'
+          valuemap:
+            name: 'Windows service state'
+          tags:
+            - tag: component
+              value: windows
+
+        - uuid: 0a5663ba03174e1483c476762e6e3121
+          name: 'Windows: Task Scheduler'
+          type: ZABBIX_PASSIVE
+          key: 'service.info[Schedule,state]'
+          delay: '{$GAMING.SERVICE.INTERVAL}'
+          value_type: UNSIGNED
+          description: 'Task Scheduler - beheert geplande taken zoals updates en onderhoud.'
+          valuemap:
+            name: 'Windows service state'
+          tags:
+            - tag: component
+              value: windows
+
+        # -----------------------------------------------------------
+        # SYSTEEM PERFORMANCE
+        # -----------------------------------------------------------
+        - uuid: 01bed533d5dd41398b4295a896505b64
+          name: 'Systeem: CPU gebruik'
+          type: ZABBIX_PASSIVE
+          key: system.cpu.util
+          delay: '{$GAMING.PERF.INTERVAL}'
+          value_type: FLOAT
+          units: '%'
+          description: 'Gemiddeld CPU gebruik over alle cores in procent.'
+          tags:
+            - tag: component
+              value: system
+          triggers:
+            - uuid: 3c86914c0e5f4dabac8e3697037a1fda
+              expression: 'avg(/Windows Gaming PC/system.cpu.util,5m)>{$GAMING.CPU.UTIL.WARN}'
+              name: 'Systeem: CPU gebruik hoog ({ITEM.LASTVALUE1}%)'
+              priority: WARNING
+              description: 'CPU gebruik is gemiddeld hoger dan {$GAMING.CPU.UTIL.WARN}% over 5 minuten. Mogelijk een vastgelopen proces of te zware belasting.'
+
+        - uuid: 8bfa230376ac440cbd5c05ad3151c611
+          name: 'Systeem: RAM beschikbaar percentage'
+          type: ZABBIX_PASSIVE
+          key: 'vm.memory.size[pavailable]'
+          delay: '{$GAMING.PERF.INTERVAL}'
+          value_type: FLOAT
+          units: '%'
+          description: 'Percentage beschikbaar geheugen. Laag = games kunnen crashen of stotteren.'
+          tags:
+            - tag: component
+              value: system
+          triggers:
+            - uuid: 913ffcb08cb448f1b939a5f824c1c79c
+              expression: 'last(/Windows Gaming PC/vm.memory.size[pavailable])<{$GAMING.RAM.AVAIL.WARN}'
+              name: 'Systeem: RAM bijna vol ({ITEM.LASTVALUE1}% beschikbaar)'
+              priority: WARNING
+              description: 'Minder dan {$GAMING.RAM.AVAIL.WARN}% geheugen beschikbaar. Games kunnen crashen of stotteren.'
+
+        - uuid: 0d6bdf8644e64ef289cfaacaac4cfa9c
+          name: 'Systeem: RAM beschikbaar bytes'
+          type: ZABBIX_PASSIVE
+          key: 'vm.memory.size[available]'
+          delay: '{$GAMING.PERF.INTERVAL}'
+          value_type: UNSIGNED
+          units: B
+          description: 'Beschikbaar geheugen in bytes.'
+          tags:
+            - tag: component
+              value: system
+
+        - uuid: 2e1577c995094c55a4dbb33a132ca404
+          name: 'Systeem: RAM totaal'
+          type: ZABBIX_PASSIVE
+          key: 'vm.memory.size[total]'
+          delay: '1h'
+          value_type: UNSIGNED
+          units: B
+          description: 'Totaal geinstalleerd geheugen in bytes.'
+          tags:
+            - tag: component
+              value: system
+
+        - uuid: b10c64add5fd48d78109a36937b65a80
+          name: 'Systeem: Disk {$GAMING.DISK.PATH} vrij percentage'
+          type: ZABBIX_PASSIVE
+          key: 'vfs.fs.size[{$GAMING.DISK.PATH},pfree]'
+          delay: '{$GAMING.PERF.INTERVAL}'
+          value_type: FLOAT
+          units: '%'
+          description: 'Percentage vrije ruimte op de game disk. Te weinig ruimte = geen updates of installaties mogelijk.'
+          tags:
+            - tag: component
+              value: system
+          triggers:
+            - uuid: 121994000b994047998baaa7b98b8e78
+              expression: 'last(/Windows Gaming PC/vfs.fs.size[{$GAMING.DISK.PATH},pfree])<{$GAMING.DISK.FREE.WARN}'
+              name: 'Systeem: Disk {$GAMING.DISK.PATH} bijna vol ({ITEM.LASTVALUE1}% vrij)'
+              priority: WARNING
+              description: 'Minder dan {$GAMING.DISK.FREE.WARN}% vrije ruimte op {$GAMING.DISK.PATH}. Ruimte nodig voor game updates.'
+            - uuid: d811e2dfffa6450583d106628ab05f9e
+              expression: 'last(/Windows Gaming PC/vfs.fs.size[{$GAMING.DISK.PATH},pfree])<{$GAMING.DISK.FREE.HIGH}'
+              name: 'Systeem: Disk {$GAMING.DISK.PATH} kritiek vol ({ITEM.LASTVALUE1}% vrij)'
+              priority: HIGH
+              description: 'Minder dan {$GAMING.DISK.FREE.HIGH}% vrije ruimte op {$GAMING.DISK.PATH}! Installaties en updates zullen falen.'
+
+        - uuid: 93d88e56558f42b58cd42afa402a70fa
+          name: 'Systeem: Disk {$GAMING.DISK.PATH} vrij bytes'
+          type: ZABBIX_PASSIVE
+          key: 'vfs.fs.size[{$GAMING.DISK.PATH},free]'
+          delay: '{$GAMING.PERF.INTERVAL}'
+          value_type: UNSIGNED
+          units: B
+          description: 'Vrije ruimte in bytes op de game disk.'
+          tags:
+            - tag: component
+              value: system
+
+        - uuid: 3bb03b3b71cf40cd9e2eb404ed1088d1
+          name: 'Systeem: Disk {$GAMING.DISK.PATH} totaal'
+          type: ZABBIX_PASSIVE
+          key: 'vfs.fs.size[{$GAMING.DISK.PATH},total]'
+          delay: '1h'
+          value_type: UNSIGNED
+          units: B
+          description: 'Totale capaciteit van de game disk.'
+          tags:
+            - tag: component
+              value: system
+
+        - uuid: 698c5d8a57584518be9aca32df657ad6
+          name: 'Systeem: Uptime'
+          type: ZABBIX_PASSIVE
+          key: system.uptime
+          delay: '{$GAMING.PERF.INTERVAL}'
+          value_type: UNSIGNED
+          units: uptime
+          description: 'Systeemuptime sinds laatste herstart.'
+          tags:
+            - tag: component
+              value: system
+
+        # -----------------------------------------------------------
+        # NETWERK - GAME SERVER PINGS
+        # Draaien als Simple Checks op de Zabbix Server/Proxy.
+        # Voor nauwkeurige metingen: gebruik een Proxy op hetzelfde
+        # netwerk als de gaming PC.
+        # -----------------------------------------------------------
+        - uuid: 1297bf33084c4eeaab332f429e163785
+          name: 'Netwerk: Ping {$GAMING.GAMESERVER.1}'
+          type: SIMPLE
+          key: 'icmpping[{$GAMING.GAMESERVER.1},4]'
+          delay: '{$GAMING.PING.INTERVAL}'
+          value_type: UNSIGNED
+          description: 'ICMP ping naar game server #1 (standaard: Cloudflare 1.1.1.1). 1 = bereikbaar, 0 = onbereikbaar.'
+          tags:
+            - tag: component
+              value: network
+          triggers:
+            - uuid: 3a2cee4ac6924300b34db34baad2a0c5
+              expression: 'max(/Windows Gaming PC/icmpping[{$GAMING.GAMESERVER.1},4],#3)=0'
+              name: 'Netwerk: Game server {$GAMING.GAMESERVER.1} onbereikbaar'
+              priority: WARNING
+              description: 'Game server {$GAMING.GAMESERVER.1} reageert 3x niet op ping. Mogelijk internetprobleem.'
+
+        - uuid: 1bcc0e2043184e958b3d823c5cb38b61
+          name: 'Netwerk: Latency {$GAMING.GAMESERVER.1}'
+          type: SIMPLE
+          key: 'icmppingsec[{$GAMING.GAMESERVER.1},4]'
+          delay: '{$GAMING.PING.INTERVAL}'
+          value_type: FLOAT
+          units: s
+          description: 'ICMP round-trip time naar game server #1 in seconden.'
+          tags:
+            - tag: component
+              value: network
+          triggers:
+            - uuid: 4baef8e4becc4738bb955536d87689d1
+              expression: 'avg(/Windows Gaming PC/icmppingsec[{$GAMING.GAMESERVER.1},4],5m)>{$GAMING.PING.WARN}'
+              name: 'Netwerk: Hoge latency naar {$GAMING.GAMESERVER.1} ({ITEM.LASTVALUE1}s)'
+              priority: WARNING
+              description: 'Gemiddelde ping naar {$GAMING.GAMESERVER.1} is hoger dan {$GAMING.PING.WARN}s. Mogelijk merkbaar in online games.'
+            - uuid: 53e558abcbdf4d7b99064ac101328193
+              expression: 'avg(/Windows Gaming PC/icmppingsec[{$GAMING.GAMESERVER.1},4],5m)>{$GAMING.PING.HIGH}'
+              name: 'Netwerk: Zeer hoge latency naar {$GAMING.GAMESERVER.1} ({ITEM.LASTVALUE1}s)'
+              priority: HIGH
+              description: 'Gemiddelde ping naar {$GAMING.GAMESERVER.1} is hoger dan {$GAMING.PING.HIGH}s. Online gaming zal flink laggen.'
+
+        - uuid: a1ae5d8aa98245ceb9998c35796aa0ed
+          name: 'Netwerk: Ping {$GAMING.GAMESERVER.2}'
+          type: SIMPLE
+          key: 'icmpping[{$GAMING.GAMESERVER.2},4]'
+          delay: '{$GAMING.PING.INTERVAL}'
+          value_type: UNSIGNED
+          description: 'ICMP ping naar game server #2 (standaard: Valve/Steam Amsterdam). 1 = bereikbaar, 0 = onbereikbaar.'
+          tags:
+            - tag: component
+              value: network
+          triggers:
+            - uuid: a92955c0e4a0489db268b5b7db54615b
+              expression: 'max(/Windows Gaming PC/icmpping[{$GAMING.GAMESERVER.2},4],#3)=0'
+              name: 'Netwerk: Game server {$GAMING.GAMESERVER.2} onbereikbaar'
+              priority: WARNING
+              description: 'Game server {$GAMING.GAMESERVER.2} reageert 3x niet op ping.'
+
+        - uuid: 2ef212b2db8b450ea5bfa4bc911985fb
+          name: 'Netwerk: Latency {$GAMING.GAMESERVER.2}'
+          type: SIMPLE
+          key: 'icmppingsec[{$GAMING.GAMESERVER.2},4]'
+          delay: '{$GAMING.PING.INTERVAL}'
+          value_type: FLOAT
+          units: s
+          description: 'ICMP round-trip time naar game server #2 in seconden.'
+          tags:
+            - tag: component
+              value: network
+          triggers:
+            - uuid: cfa580aebe7142b590ed84ecc22ab3b8
+              expression: 'avg(/Windows Gaming PC/icmppingsec[{$GAMING.GAMESERVER.2},4],5m)>{$GAMING.PING.WARN}'
+              name: 'Netwerk: Hoge latency naar {$GAMING.GAMESERVER.2} ({ITEM.LASTVALUE1}s)'
+              priority: WARNING
+              description: 'Gemiddelde ping naar {$GAMING.GAMESERVER.2} is hoger dan {$GAMING.PING.WARN}s.'
+            - uuid: 73e47c2851124a689e595484996d5661
+              expression: 'avg(/Windows Gaming PC/icmppingsec[{$GAMING.GAMESERVER.2},4],5m)>{$GAMING.PING.HIGH}'
+              name: 'Netwerk: Zeer hoge latency naar {$GAMING.GAMESERVER.2} ({ITEM.LASTVALUE1}s)'
+              priority: HIGH
+              description: 'Gemiddelde ping naar {$GAMING.GAMESERVER.2} is hoger dan {$GAMING.PING.HIGH}s.'
+
+        - uuid: 1e4e740400e54c06b108ef860513c97f
+          name: 'Netwerk: Ping {$GAMING.GAMESERVER.3}'
+          type: SIMPLE
+          key: 'icmpping[{$GAMING.GAMESERVER.3},4]'
+          delay: '{$GAMING.PING.INTERVAL}'
+          value_type: UNSIGNED
+          description: 'ICMP ping naar game server #3 (standaard: Google DNS 8.8.8.8). 1 = bereikbaar, 0 = onbereikbaar.'
+          tags:
+            - tag: component
+              value: network
+          triggers:
+            - uuid: cfec3807360c47f3acd7a37addc34768
+              expression: 'max(/Windows Gaming PC/icmpping[{$GAMING.GAMESERVER.3},4],#3)=0'
+              name: 'Netwerk: Game server {$GAMING.GAMESERVER.3} onbereikbaar'
+              priority: WARNING
+              description: 'Game server {$GAMING.GAMESERVER.3} reageert 3x niet op ping.'
+
+        - uuid: 1f88bb77a8494dfa902335d29cbafd30
+          name: 'Netwerk: Latency {$GAMING.GAMESERVER.3}'
+          type: SIMPLE
+          key: 'icmppingsec[{$GAMING.GAMESERVER.3},4]'
+          delay: '{$GAMING.PING.INTERVAL}'
+          value_type: FLOAT
+          units: s
+          description: 'ICMP round-trip time naar game server #3 in seconden.'
+          tags:
+            - tag: component
+              value: network
+          triggers:
+            - uuid: 5169980a9d6a4f049b2ce46f43bf0217
+              expression: 'avg(/Windows Gaming PC/icmppingsec[{$GAMING.GAMESERVER.3},4],5m)>{$GAMING.PING.WARN}'
+              name: 'Netwerk: Hoge latency naar {$GAMING.GAMESERVER.3} ({ITEM.LASTVALUE1}s)'
+              priority: WARNING
+              description: 'Gemiddelde ping naar {$GAMING.GAMESERVER.3} is hoger dan {$GAMING.PING.WARN}s.'
+            - uuid: 4c0005e017c34660bf3e2565c5203dae
+              expression: 'avg(/Windows Gaming PC/icmppingsec[{$GAMING.GAMESERVER.3},4],5m)>{$GAMING.PING.HIGH}'
+              name: 'Netwerk: Zeer hoge latency naar {$GAMING.GAMESERVER.3} ({ITEM.LASTVALUE1}s)'
+              priority: HIGH
+              description: 'Gemiddelde ping naar {$GAMING.GAMESERVER.3} is hoger dan {$GAMING.PING.HIGH}s.'
+
+      # ===========================================================
+      # VALUE MAPS
+      # ===========================================================
+      valuemaps:
+        - uuid: f1ea611768ad43838c5e3451b265c6c7
+          name: 'Windows service state'
+          mappings:
+            - value: '0'
+              newvalue: Running
+            - value: '1'
+              newvalue: Paused
+            - value: '2'
+              newvalue: 'Start pending'
+            - value: '3'
+              newvalue: 'Pause pending'
+            - value: '4'
+              newvalue: 'Continue pending'
+            - value: '5'
+              newvalue: 'Stop pending'
+            - value: '6'
+              newvalue: Stopped
+            - value: '7'
+              newvalue: Unknown
+            - value: '255'
+              newvalue: 'No such service'
+
+      # ===========================================================
+      # DASHBOARDS
+      # ===========================================================
+      dashboards:
+        - uuid: c1b063e8c1884171a1ebe752458c6600
+          name: 'Gaming PC Overview'
+          pages:
+            - widgets:
+                - type: PLAIN_TEXT
+                  name: 'Windows & GPU Services'
+                  width: '12'
+                  height: '4'
+                  fields:
+                    - type: ITEM
+                      name: itemids
+                      value:
+                        host: 'Windows Gaming PC'
+                        key: 'service.info[WinDefend,state]'
+                    - type: ITEM
+                      name: itemids
+                      value:
+                        host: 'Windows Gaming PC'
+                        key: 'service.info[mpssvc,state]'
+                    - type: ITEM
+                      name: itemids
+                      value:
+                        host: 'Windows Gaming PC'
+                        key: 'service.info[Audiosrv,state]'
+                    - type: ITEM
+                      name: itemids
+                      value:
+                        host: 'Windows Gaming PC'
+                        key: 'service.info[Dnscache,state]'
+                    - type: ITEM
+                      name: itemids
+                      value:
+                        host: 'Windows Gaming PC'
+                        key: 'service.info[AMD External Events Utility,state]'
+                    - type: INTEGER
+                      name: show_lines
+                      value: '10'
+
+                - type: PLAIN_TEXT
+                  name: 'Gaming Launchers'
+                  x: '12'
+                  width: '12'
+                  height: '4'
+                  fields:
+                    - type: ITEM
+                      name: itemids
+                      value:
+                        host: 'Windows Gaming PC'
+                        key: 'service.info[Steam Client Service,state]'
+                    - type: ITEM
+                      name: itemids
+                      value:
+                        host: 'Windows Gaming PC'
+                        key: 'proc.num[steam.exe]'
+                    - type: ITEM
+                      name: itemids
+                      value:
+                        host: 'Windows Gaming PC'
+                        key: 'proc.num[EpicGamesLauncher.exe]'
+                    - type: ITEM
+                      name: itemids
+                      value:
+                        host: 'Windows Gaming PC'
+                        key: 'service.info[GamingServices,state]'
+                    - type: ITEM
+                      name: itemids
+                      value:
+                        host: 'Windows Gaming PC'
+                        key: 'proc.num[GalaxyClient.exe]'
+                    - type: INTEGER
+                      name: show_lines
+                      value: '10'
+
+                - type: GRAPH_CLASSIC
+                  name: 'CPU & Geheugen'
+                  y: '4'
+                  width: '12'
+                  height: '5'
+                  fields:
+                    - type: ITEM
+                      name: itemids
+                      value:
+                        host: 'Windows Gaming PC'
+                        key: system.cpu.util
+                    - type: ITEM
+                      name: itemids
+                      value:
+                        host: 'Windows Gaming PC'
+                        key: 'vm.memory.size[pavailable]'
+
+                - type: GRAPH_CLASSIC
+                  name: 'Game Server Latency'
+                  x: '12'
+                  y: '4'
+                  width: '12'
+                  height: '5'
+                  fields:
+                    - type: ITEM
+                      name: itemids
+                      value:
+                        host: 'Windows Gaming PC'
+                        key: 'icmppingsec[{$GAMING.GAMESERVER.1},4]'
+                    - type: ITEM
+                      name: itemids
+                      value:
+                        host: 'Windows Gaming PC'
+                        key: 'icmppingsec[{$GAMING.GAMESERVER.2},4]'
+                    - type: ITEM
+                      name: itemids
+                      value:
+                        host: 'Windows Gaming PC'
+                        key: 'icmppingsec[{$GAMING.GAMESERVER.3},4]'
+
+                - type: PROBLEMS
+                  name: 'Actieve Problemen'
+                  y: '9'
+                  width: '24'
+                  height: '4'
